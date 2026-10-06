@@ -1,0 +1,47 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMInstance
+metadata:
+  name: app
+spec:
+  instanceType: u1.small
+  instanceProfile: ubuntu
+  runStrategy: Always
+  disks:
+    - name: app-disk
+  sshKeys:
+    - "__SSH_KEY__"
+  cloudInit: |
+    #cloud-config
+    package_update: true
+    packages:
+      - python3-venv
+      - python3-pip
+    write_files:
+      - path: /opt/app/app.py
+        encoding: b64
+        content: __APP_PY_B64__
+      - path: /opt/app/requirements.txt
+        content: |
+          Flask>=3.0,<4.0
+          psycopg[binary]>=3.1,<4.0
+      - path: /etc/app.env
+        encoding: b64
+        content: __APP_ENV_B64__
+      - path: /etc/systemd/system/app.service
+        content: |
+          [Unit]
+          Description=Demo app (VM to tenant Postgres)
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          EnvironmentFile=/etc/app.env
+          ExecStart=/opt/app/venv/bin/python /opt/app/app.py
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+    runcmd:
+      - python3 -m venv /opt/app/venv
+      - /opt/app/venv/bin/pip install --no-cache-dir -r /opt/app/requirements.txt
+      - systemctl daemon-reload
+      - systemctl enable --now app.service

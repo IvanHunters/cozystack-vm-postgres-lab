@@ -1,0 +1,15 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: demo
+spec:
+  replicas: 2
+  resourcesPreset: s1.small
+  size: 5Gi
+  users:
+    appuser: {}
+  databases:
+    appdb:
+      roles:
+        admin:
+          - appuser

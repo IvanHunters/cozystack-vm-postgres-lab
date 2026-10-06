@@ -1,0 +1,11 @@
+# local SSH keys used for the lab VM
+lab_key
+lab_key.pub
+*.pem
+
+# rendered manifests (contain the injected DB password)
+*.rendered.yaml
+
+# python
+__pycache__/
+*.pyc

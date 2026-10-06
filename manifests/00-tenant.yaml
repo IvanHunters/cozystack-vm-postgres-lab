@@ -1,0 +1,15 @@
+# OPTIONAL: create a dedicated tenant for the lab.
+# Usually you already have a tenant: skip this file and use your namespace.
+# Creating a Tenant requires access to the parent (tenant-root).
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Tenant
+metadata:
+  name: practice
+  namespace: tenant-root
+spec:
+  etcd: false
+  ingress: false
+  isolated: false
+  monitoring: false
+  seaweedfs: false
+  resourceQuotas: {}
