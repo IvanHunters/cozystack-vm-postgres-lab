@@ -1,0 +1,155 @@
+# Полный манифест для дашборда Cozystack: один файл, одно применение.
+# Создаёт сразу: managed PostgreSQL, диск ВМ и саму ВМ с приложением.
+# Терминал не нужен, всё создаётся из дашборда.
+#
+# Вход в ВМ: консоль дашборда (VNC) или SSH, пользователь "ubuntu",
+# пароль "cozystack" (лабораторный, поменяйте для реального).
+#
+# Пароль БД в app.env оставлен заглушкой. После входа в ВМ впишите реальный
+# пароль пользователя appuser (дашборд -> Secrets -> postgres-demo-credentials
+# -> ключ "appuser") в /etc/app.env и выполните: sudo systemctl restart app
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Postgres
+metadata:
+  name: demo
+spec:
+  replicas: 2
+  resourcesPreset: s1.small
+  size: 5Gi
+  users:
+    appuser: {}
+  databases:
+    appdb:
+      roles:
+        admin:
+          - appuser
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: app-disk
+spec:
+  storage: 5Gi
+  storageClass: replicated
+  optical: false
+  source:
+    http:
+      url: https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMInstance
+metadata:
+  name: app
+spec:
+  instanceType: u1.small
+  instanceProfile: ubuntu
+  runStrategy: Always
+  disks:
+    - name: app-disk
+  cloudInit: |
+    #cloud-config
+    ssh_pwauth: true
+    password: cozystack
+    chpasswd:
+      expire: false
+    package_update: true
+    packages:
+      - python3-venv
+      - python3-pip
+    write_files:
+      - path: /opt/app/app.py
+        content: |
+          """Minimal demo service: a VM-hosted web app that stores records in a
+          managed PostgreSQL database running in the same Cozystack tenant.
+          
+          Connection parameters are taken from the standard libpq environment
+          variables (PGHOST, PGPORT, PGUSER, PGPASSWORD, PGDATABASE). They are set in
+          /etc/app.env, populated from the managed Postgres credentials secret. Using
+          the libpq variables avoids URL-encoding issues with generated passwords."""
+          import psycopg
+          from flask import Flask, jsonify, request
+          
+          app = Flask(__name__)
+          
+          
+          def init_db():
+              with psycopg.connect() as conn:
+                  conn.execute(
+                      "CREATE TABLE IF NOT EXISTS items ("
+                      "id serial PRIMARY KEY, "
+                      "name text NOT NULL, "
+                      "created_at timestamptz NOT NULL DEFAULT now())"
+                  )
+                  conn.commit()
+          
+          
+          @app.get("/health")
+          def health():
+              with psycopg.connect() as conn:
+                  conn.execute("SELECT 1")
+              return {"status": "ok"}
+          
+          
+          @app.get("/items")
+          def list_items():
+              with psycopg.connect() as conn:
+                  rows = conn.execute(
+                      "SELECT id, name, created_at FROM items ORDER BY id"
+                  ).fetchall()
+              return jsonify(
+                  [
+                      {"id": r[0], "name": r[1], "created_at": r[2].isoformat()}
+                      for r in rows
+                  ]
+              )
+          
+          
+          @app.post("/items")
+          def add_item():
+              payload = request.get_json(force=True) or {}
+              name = payload.get("name")
+              if not name:
+                  return {"error": "name is required"}, 400
+              with psycopg.connect() as conn:
+                  row = conn.execute(
+                      "INSERT INTO items (name) VALUES (%s) RETURNING id", (name,)
+                  ).fetchone()
+                  conn.commit()
+              return {"id": row[0], "name": name}, 201
+          
+          
+          if __name__ == "__main__":
+              init_db()
+              app.run(host="0.0.0.0", port=8080)
+      - path: /opt/app/requirements.txt
+        content: |
+          Flask>=3.0,<4.0
+          psycopg[binary]>=3.1,<4.0
+      - path: /etc/app.env
+        content: |
+          # Впишите пароль appuser из секрета postgres-demo-credentials,
+          # затем: sudo systemctl restart app
+          PGHOST=postgres-demo-rw
+          PGPORT=5432
+          PGUSER=appuser
+          PGPASSWORD=REPLACE_ME_FROM_SECRET
+          PGDATABASE=appdb
+      - path: /etc/systemd/system/app.service
+        content: |
+          [Unit]
+          Description=Demo app (VM to tenant Postgres)
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          EnvironmentFile=/etc/app.env
+          ExecStart=/opt/app/venv/bin/python /opt/app/app.py
+          Restart=always
+          RestartSec=5
+          [Install]
+          WantedBy=multi-user.target
+    runcmd:
+      - python3 -m venv /opt/app/venv
+      - /opt/app/venv/bin/pip install --no-cache-dir -r /opt/app/requirements.txt
+      - systemctl daemon-reload
+      - systemctl enable --now app.service
